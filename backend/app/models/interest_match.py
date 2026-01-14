@@ -15,7 +15,7 @@ class UserInterest(Base):
     When both users have mutual interest, they can proceed to schedule a meetup.
     """
 
-    __tablename__ = "user_interests"
+    __tablename__ = "expressed_interests"
     __table_args__ = (
         # Each user can only express interest in another user once per availability
         UniqueConstraint("requester_id", "target_id", "availability_id", name="unique_interest"),
