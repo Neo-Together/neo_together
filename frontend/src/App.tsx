@@ -1,14 +1,11 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-// Pages (we'll create these)
+// Pages
 import Home from './pages/Home'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
-import Browse from './pages/Browse'
-import Availability from './pages/Availability'
-import Meetups from './pages/Meetups'
-import Profile from './pages/Profile'
+import Dashboard from './pages/Dashboard'
 
 // Hooks
 import { useAuthStore } from './stores/auth'
@@ -27,48 +24,28 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <div className="min-h-screen bg-gray-50">
-          <Routes>
-            {/* Public routes */}
-            <Route path="/" element={<Home />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/signup" element={<Signup />} />
+        <Routes>
+          {/* Public routes */}
+          <Route path="/" element={<Home />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
 
-            {/* Protected routes */}
-            <Route
-              path="/browse"
-              element={
-                <ProtectedRoute>
-                  <Browse />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/availability"
-              element={
-                <ProtectedRoute>
-                  <Availability />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/meetups"
-              element={
-                <ProtectedRoute>
-                  <Meetups />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/profile"
-              element={
-                <ProtectedRoute>
-                  <Profile />
-                </ProtectedRoute>
-              }
-            />
-          </Routes>
-        </div>
+          {/* Main app - single dashboard */}
+          <Route
+            path="/app"
+            element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Redirect old routes to dashboard */}
+          <Route path="/browse" element={<Navigate to="/app" replace />} />
+          <Route path="/availability" element={<Navigate to="/app" replace />} />
+          <Route path="/meetups" element={<Navigate to="/app" replace />} />
+          <Route path="/profile" element={<Navigate to="/app" replace />} />
+        </Routes>
       </BrowserRouter>
     </QueryClientProvider>
   )

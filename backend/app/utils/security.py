@@ -1,16 +1,13 @@
+import hashlib
 import secrets
 from datetime import datetime, timedelta
 from typing import Any
 
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.config import get_settings
 
 settings = get_settings()
-
-# Password hashing context (we use this to hash private keys)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def generate_private_key() -> str:
@@ -22,13 +19,13 @@ def generate_private_key() -> str:
 
 
 def hash_private_key(private_key: str) -> str:
-    """Hash a private key for storage."""
-    return pwd_context.hash(private_key)
+    """Hash a private key for storage using SHA256."""
+    return hashlib.sha256(private_key.encode()).hexdigest()
 
 
 def verify_private_key(plain_key: str, hashed_key: str) -> bool:
-    """Verify a private key against its hash."""
-    return pwd_context.verify(plain_key, hashed_key)
+    """Verify a private key against its SHA256 hash."""
+    return hashlib.sha256(plain_key.encode()).hexdigest() == hashed_key
 
 
 def create_access_token(data: dict[str, Any], expires_delta: timedelta | None = None) -> str:

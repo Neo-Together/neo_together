@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 
@@ -13,10 +13,23 @@ export default function Signup() {
   const [firstName, setFirstName] = useState('')
   const [birthYear, setBirthYear] = useState('')
   const [gender, setGender] = useState('')
-  const [selectedInterests, setSelectedInterests] = useState<number[]>([])
+  const [interestInput, setInterestInput] = useState('')
+  const [selectedInterests, setSelectedInterests] = useState<Interest[]>([])
   const [privateKey, setPrivateKey] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [showNameSuggestions, setShowNameSuggestions] = useState(false)
+  const [showInterestSuggestions, setShowInterestSuggestions] = useState(false)
+
+  // Fetch approved names
+  const { data: approvedNames = [] } = useQuery<string[]>({
+    queryKey: ['approvedNames'],
+    queryFn: async () => {
+      const res = await fetch('/api/auth/approved-names')
+      if (!res.ok) throw new Error('Failed to load approved names')
+      return res.json()
+    },
+  })
 
   // Fetch interests from API
   const { data: interests = [], isLoading: loadingInterests } = useQuery<Interest[]>({
@@ -28,13 +41,41 @@ export default function Signup() {
     },
   })
 
-  // Group interests by category
-  const interestsByCategory = interests.reduce((acc, interest) => {
-    const category = interest.category || 'Other'
-    if (!acc[category]) acc[category] = []
-    acc[category].push(interest)
-    return acc
-  }, {} as Record<string, Interest[]>)
+  // Filter names based on input
+  const filteredNames = useMemo(() => {
+    if (!firstName.trim()) return []
+    return approvedNames.filter((name) =>
+      name.toLowerCase().startsWith(firstName.toLowerCase())
+    )
+  }, [firstName, approvedNames])
+
+  // Filter interests based on input
+  const filteredInterests = useMemo(() => {
+    if (!interestInput.trim()) return []
+    return interests.filter(
+      (interest) =>
+        interest.name.toLowerCase().includes(interestInput.toLowerCase()) &&
+        !selectedInterests.some((s) => s.id === interest.id)
+    )
+  }, [interestInput, interests, selectedInterests])
+
+  const handleSelectName = (name: string) => {
+    setFirstName(name)
+    setShowNameSuggestions(false)
+  }
+
+  // Check if current firstName is a valid approved name
+  const isValidName = firstName && approvedNames.some((name) => name.toLowerCase() === firstName.toLowerCase())
+
+  const handleSelectInterest = (interest: Interest) => {
+    setSelectedInterests((prev) => [...prev, interest])
+    setInterestInput('')
+    setShowInterestSuggestions(false)
+  }
+
+  const handleRemoveInterest = (interestId: number) => {
+    setSelectedInterests((prev) => prev.filter((i) => i.id !== interestId))
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -54,7 +95,7 @@ export default function Signup() {
           first_name: firstName,
           birth_year: parseInt(birthYear),
           gender,
-          interest_ids: selectedInterests,
+          interest_ids: selectedInterests.map((i) => i.id),
         }),
       })
 
@@ -71,12 +112,6 @@ export default function Signup() {
     } finally {
       setLoading(false)
     }
-  }
-
-  const toggleInterest = (id: number) => {
-    setSelectedInterests((prev) =>
-      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
-    )
   }
 
   if (step === 3 && privateKey) {
@@ -123,31 +158,79 @@ export default function Signup() {
           {step === 1 && (
             <>
               <div>
-                <label className="block text-sm font-medium mb-1">First Name</label>
-                <input
-                  type="text"
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  className="w-full border rounded-lg p-2"
-                  placeholder="Choose from approved names"
-                  required
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Must be from the approved names list for privacy
+                <label className="block text-sm font-medium mb-1">Preferred Name</label>
+                <div className="relative">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={firstName}
+                      onChange={(e) => {
+                        setFirstName(e.target.value)
+                        setShowNameSuggestions(true)
+                      }}
+                      onFocus={() => setShowNameSuggestions(true)}
+                      className="flex-1 border rounded-lg p-2"
+                      placeholder="Start typing a name..."
+                      autoComplete="off"
+                    />
+                    {firstName && (
+                      <span className={`text-2xl ${isValidName ? 'text-green-500' : 'text-red-500'}`}>
+                        {isValidName ? '✓' : '✗'}
+                      </span>
+                    )}
+                  </div>
+                  {showNameSuggestions && (
+                    <div className="absolute z-10 w-full bg-white border border-gray-300 rounded-lg mt-1 max-h-40 overflow-y-auto">
+                      {filteredNames.length > 0 ? (
+                        filteredNames.map((name) => (
+                          <button
+                            key={name}
+                            type="button"
+                            onClick={() => handleSelectName(name)}
+                            className="w-full text-left px-3 py-2 hover:bg-blue-100"
+                          >
+                            {name}
+                          </button>
+                        ))
+                      ) : firstName ? (
+                        <div className="px-3 py-2 text-gray-500 text-sm">
+                          No names match "{firstName}"
+                        </div>
+                      ) : (
+                        <div className="px-3 py-2 text-gray-500 text-sm">
+                          No suggestions yet. Start typing...
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  We're sorry if your name isn't in our list. We use this limited list to help prevent hate speech.
                 </p>
+                {firstName && !isValidName && (
+                  <p className="text-xs text-red-600 mt-1">
+                    This name is not in the approved list. Please select from the suggestions.
+                  </p>
+                )}
               </div>
+
               <div>
                 <label className="block text-sm font-medium mb-1">Birth Year</label>
-                <input
-                  type="number"
+                <select
                   value={birthYear}
                   onChange={(e) => setBirthYear(e.target.value)}
                   className="w-full border rounded-lg p-2"
-                  min="1900"
-                  max="2010"
                   required
-                />
+                >
+                  <option value="">Select...</option>
+                  {Array.from({ length: 111 }, (_, i) => 2010 - i).map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
               </div>
+
               <div>
                 <label className="block text-sm font-medium mb-1">Gender</label>
                 <select
@@ -162,10 +245,11 @@ export default function Signup() {
                   <option value="other">Other</option>
                 </select>
               </div>
+
               <button
                 type="button"
                 onClick={() => setStep(2)}
-                disabled={!firstName || !birthYear || !gender}
+                disabled={!isValidName || !birthYear || !gender}
                 className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
               >
                 Next
@@ -177,38 +261,64 @@ export default function Signup() {
             <>
               <div>
                 <label className="block text-sm font-medium mb-2">
-                  Select your interests (at least 1)
+                  Add at least 1 interest (you can modifiy this later)
                 </label>
-                {loadingInterests ? (
-                  <p className="text-gray-500">Loading interests...</p>
-                ) : (
-                  <div className="space-y-4 max-h-80 overflow-y-auto">
-                    {Object.entries(interestsByCategory).map(([category, categoryInterests]) => (
-                      <div key={category}>
-                        <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">
-                          {category}
-                        </h3>
-                        <div className="grid grid-cols-2 gap-2">
-                          {categoryInterests.map((interest) => (
-                            <button
-                              key={interest.id}
-                              type="button"
-                              onClick={() => toggleInterest(interest.id)}
-                              className={`p-2 rounded-lg border text-sm text-left ${
-                                selectedInterests.includes(interest.id)
-                                  ? 'bg-blue-600 text-white border-blue-600'
-                                  : 'bg-white text-gray-700 border-gray-300 hover:border-blue-400'
-                              }`}
-                            >
-                              {interest.name}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
+                <div className="relative mb-4">
+                  <input
+                    type="text"
+                    value={interestInput}
+                    onChange={(e) => {
+                      setInterestInput(e.target.value)
+                      setShowInterestSuggestions(true)
+                    }}
+                    onFocus={() => setShowInterestSuggestions(true)}
+                    className="w-full border rounded-lg p-2"
+                    placeholder="Type an interest..."
+                    autoComplete="off"
+                    disabled={loadingInterests}
+                  />
+                  {showInterestSuggestions && filteredInterests.length > 0 && (
+                    <div className="absolute z-10 w-full bg-white border border-gray-300 rounded-lg mt-1 max-h-40 overflow-y-auto">
+                      {filteredInterests.map((interest) => (
+                        <button
+                          key={interest.id}
+                          type="button"
+                          onClick={() => handleSelectInterest(interest)}
+                          className="w-full text-left px-3 py-2 hover:bg-blue-100"
+                        >
+                          {interest.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {selectedInterests.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-sm font-medium mb-2">Selected interests:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedInterests.map((interest) => (
+                        <span
+                          key={interest.id}
+                          className="bg-blue-600 text-white px-3 py-1 rounded-full text-sm flex items-center gap-2"
+                        >
+                          {interest.name}
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveInterest(interest.id)}
+                            className="hover:text-blue-200"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 )}
+
+                {loadingInterests && <p className="text-gray-500 text-sm">Loading interests...</p>}
               </div>
+
               <div className="flex gap-2">
                 <button
                   type="button"

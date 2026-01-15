@@ -36,7 +36,7 @@ export default function Login() {
       const user = await userResponse.json()
 
       setAuth(access_token, user)
-      navigate('/browse')
+      navigate('/app')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
     } finally {
