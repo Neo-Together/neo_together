@@ -1,5 +1,7 @@
 # Neo Together - Development Guide
 
+> **IMPORTANT**: Keep this file up to date when making significant changes to models, endpoints, or features.
+
 ## Project Overview
 A Progressive Web App for facilitating real-world meetups based on shared interests and location/time availability. No in-app messaging - purely about connecting people in person.
 
@@ -9,7 +11,7 @@ A Progressive Web App for facilitating real-world meetups based on shared intere
 - **Framework**: FastAPI (Python 3.11+)
 - **Database**: PostgreSQL with PostGIS (geospatial)
 - **ORM**: SQLAlchemy 2.0 (async)
-- **Auth**: JWT tokens with bcrypt-hashed private keys
+- **Auth**: JWT tokens + Magic link email OR private keys
 - **Migrations**: Alembic
 
 ### Frontend
@@ -31,34 +33,35 @@ neo_together/
 │   │   ├── config.py            # Settings from .env
 │   │   ├── database.py          # Async SQLAlchemy setup
 │   │   ├── dependencies.py      # Auth middleware (get_current_user)
-│   │   ├── seed.py              # Seed script for interests
+│   │   ├── seed.py              # Seed script for interests + test users
 │   │   ├── models/
 │   │   │   ├── __init__.py      # Exports all models
 │   │   │   ├── user.py          # User, Interest models
 │   │   │   ├── availability.py  # Availability model
-│   │   │   ├── meetup.py        # MeetupRequest, Meetup models
-│   │   │   └── interest_match.py # UserInterest, Match models
+│   │   │   ├── meetup.py        # MeetupRequest, Meetup models (legacy)
+│   │   │   ├── interest_match.py # UserInterest, Match models
+│   │   │   └── group.py         # Group, GroupMember, GroupJoinRequest
 │   │   ├── schemas/
 │   │   │   ├── __init__.py
 │   │   │   ├── user.py          # User/Auth schemas
 │   │   │   ├── availability.py  # Availability schemas
 │   │   │   ├── meetup.py        # Meetup schemas
-│   │   │   └── matching.py      # Discovery/matching schemas
+│   │   │   ├── matching.py      # Discovery/matching schemas
+│   │   │   └── group.py         # Group schemas
 │   │   ├── routers/
 │   │   │   ├── __init__.py
-│   │   │   ├── auth.py          # /auth/* - signup, login
-│   │   │   ├── users.py         # /users/* - profile
+│   │   │   ├── auth.py          # /auth/* - signup, login, magic link
+│   │   │   ├── users.py         # /users/* - profile, preferences
 │   │   │   ├── interests.py     # /interests - list topics
 │   │   │   ├── availability.py  # /availability/* - CRUD
-│   │   │   └── discover.py      # /discover/* - matching
+│   │   │   ├── discover.py      # /discover/* - matching
+│   │   │   └── groups.py        # /groups/* - group management
 │   │   └── utils/
 │   │       ├── __init__.py
 │   │       ├── security.py      # JWT, bcrypt, key generation
-│   │       └── names.py         # Approved names list
+│   │       ├── names.py         # Approved names list
+│   │       └── email.py         # Magic link email sending
 │   ├── migrations/
-│   │   ├── env.py               # Alembic async config
-│   │   ├── script.py.mako
-│   │   └── versions/            # Migration files
 │   ├── tests/
 │   ├── alembic.ini
 │   ├── requirements.txt
@@ -70,16 +73,15 @@ neo_together/
 │   │   ├── index.css            # Tailwind imports
 │   │   ├── pages/
 │   │   │   ├── Home.tsx         # Landing page
-│   │   │   ├── Login.tsx        # Login form
-│   │   │   ├── Signup.tsx       # Multi-step signup
-│   │   │   ├── Browse.tsx       # Map + discovery
-│   │   │   ├── Availability.tsx # Manage availability
-│   │   │   ├── Meetups.tsx      # Matches + scheduling
-│   │   │   └── Profile.tsx      # User profile
+│   │   │   ├── Login.tsx        # Login (email + private key modes)
+│   │   │   ├── Signup.tsx       # Multi-step signup (email + private key)
+│   │   │   └── Dashboard.tsx    # Main app hub (map, people, groups, matches)
 │   │   ├── components/
 │   │   │   ├── Layout.tsx       # Nav + header
 │   │   │   ├── LocationPicker.tsx # Google Places autocomplete
-│   │   │   └── AvailabilityForm.tsx # Add/edit availability
+│   │   │   ├── AvailabilityForm.tsx # Add/edit availability
+│   │   │   ├── TipsModal.tsx    # Tips and hints modal
+│   │   │   └── OpenSourceNotice.tsx # Open source explanation
 │   │   └── stores/
 │   │       └── auth.ts          # Zustand auth store
 │   ├── public/
@@ -97,11 +99,18 @@ neo_together/
 
 ### User
 - `id` (UUID, PK)
-- `private_key_hash` (bcrypt hash)
+- `private_key_hash` (SHA256 hash)
 - `first_name` (from approved list)
 - `birth_year`, `gender`
 - `is_available` (global toggle)
 - `interests` (M2M → Interest)
+- **Preferences:**
+  - `min_age_preference`, `max_age_preference` (optional)
+  - `gender_preferences` (array of strings)
+  - `min_group_size`, `max_group_size` (default 2, 10)
+- **Email Auth:**
+  - `email` (unique, optional for legacy users)
+  - `magic_token`, `magic_token_expires`
 
 ### Interest (Topics/Hobbies)
 - `id`, `name`, `category`
@@ -124,22 +133,35 @@ neo_together/
 - `status`: pending → time_proposed → confirmed
 - `proposed_datetime`, `proposed_by_id`, `confirmed_at`
 
-### MeetupRequest / Meetup (Legacy - not actively used)
-- Original design before Match model
-- Can be removed or repurposed
+### Group (Formed on mutual match)
+- `id`, `availability_id`, `status`, `created_at`
+- Groups auto-form when two users match
+
+### GroupMember
+- `id`, `group_id`, `user_id`, `role`, `status`, `joined_at`
+- Roles: founder, member
+- Status: confirmed, pending, declined
+
+### GroupJoinRequest
+- `id`, `group_id`, `user_id`, `status`, `created_at`, `responded_at`
+- For users requesting to join existing groups
 
 ---
 
 ## API Endpoints
 
 ### Auth (`/auth`)
-- `POST /signup` - Create account, returns private key
-- `POST /login` - Returns JWT token
+- `POST /signup` - Create account with private key
+- `POST /signup-with-email` - Create account with email
+- `POST /login` - Login with private key, returns JWT
+- `POST /request-magic-link` - Send login link to email
+- `POST /verify-magic-link` - Verify token, return JWT
 - `GET /approved-names` - List of valid first names
 
 ### Users (`/users`)
 - `GET /me` - Current user profile
 - `PATCH /me/availability` - Toggle global availability
+- `PATCH /me/preferences` - Update age/gender/group preferences
 
 ### Interests (`/interests`)
 - `GET /` - List all interest topics
@@ -153,45 +175,49 @@ neo_together/
 
 ### Discovery (`/discover`)
 - `GET /locations` - Locations with people counts
-- `GET /locations/{id}/people` - People at location + overlap info
-- `POST /interest` - Express interest (creates Match if mutual)
+- `GET /locations/{id}/people` - People at location (sorted by preference match)
+- `POST /interest` - Express interest (creates Match + Group if mutual)
 - `GET /matches` - My matches
 - `POST /matches/{id}/propose-time` - Propose meetup time
 - `POST /matches/{id}/confirm` - Confirm proposed time
 - `GET /interests/sent` - Interests I've expressed
 
+### Groups (`/groups`)
+- `GET /` - My groups
+- `GET /join-requests` - Pending join requests for my groups
+- `POST /{id}/join` - Request to join a group
+- `POST /join-requests/{id}/accept` - Accept join request
+- `POST /join-requests/{id}/decline` - Decline join request
+
 ---
 
-## User Flows
+## Key Features
 
-### 1. Signup
-1. Enter name (from approved list) + birth year + gender
-2. Select interests (fetched from `/interests`)
-3. System generates private key (shown once!)
-4. User saves key, proceeds to login
+### Discovery & Matching
+- **Location search**: Google Places autocomplete to search/jump to locations
+- **People sorting**: Sorted by preference match (age + gender) then time overlap
+- **Interest display**: Shows "You both like" (shared) and "They also like" (other)
+- **"I'll be here too"**: Add yourself to an existing spot with one click
 
-### 2. Login
-1. Enter name + private key
-2. System verifies against bcrypt hash
-3. Returns JWT token (stored in Zustand + localStorage)
+### Groups
+- Auto-formed when two users mutually match
+- Others can request to join groups
+- Group size preferences (min/max) enforced
+- Join request accept/decline by any member
 
-### 3. Set Availability
-1. Click "Add Availability Slot"
-2. Search for location (Google Places Autocomplete)
-3. Set time range + repeat days
-4. Save → stored with PostGIS coordinates
+### Authentication
+- **Email (recommended)**: Magic link sent to email, click to login
+- **Private key (legacy)**: 32-char hex key, user must save it
 
-### 4. Discover People
-1. Map shows markers at locations with people
-2. Click marker → see list of people there
-3. Each person shows: name, age, interests, time overlap
-4. "Express Interest" button
+### User Preferences
+- Age range (min/max)
+- Gender preferences (multi-select)
+- Group size comfort (min/max people)
 
-### 5. Matching
-1. Express interest → check for mutual interest
-2. If mutual → Match created, both notified
-3. One proposes time → other confirms
-4. Meetup confirmed!
+### UI Features
+- Tips modal with location-specific and general advice
+- Open source notice explaining transparency
+- Available/Away toggle with explanation
 
 ---
 
@@ -212,14 +238,15 @@ docker compose up -d
 # 2. Backend setup
 cd backend
 python -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
+source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your settings
 
 # 3. Create tables and seed data
 python -c "from app.database import engine, Base; import asyncio; from app.models import *; asyncio.run(engine.run_sync(Base.metadata.create_all))"
-python -m app.seed
+python -m app.seed                    # Seed interests only
+python -m app.seed --with-test-users  # Seed interests + 5 test users
 
 # 4. Start backend
 uvicorn app.main:app --reload
@@ -246,6 +273,14 @@ npm run dev
 DEBUG=true
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/neo_together
 SECRET_KEY=your_secret_key_here  # openssl rand -hex 32
+FRONTEND_URL=http://localhost:5173
+
+# Email (optional - magic links printed to console in debug mode)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM_EMAIL=noreply@neotogether.app
 ```
 
 ### Frontend (.env)
@@ -255,43 +290,29 @@ VITE_GOOGLE_MAPS_API_KEY=your_google_maps_api_key
 
 ---
 
-## Completed Milestones
+## Test Users
 
-- [x] **Milestone 1**: Foundation - Project setup, database, basic structure
-- [x] **Milestone 2**: Authentication - Private key system, JWT tokens
-- [x] **Milestone 3**: Profile & Interests - Interest selection, profile viewing
-- [x] **Milestone 4**: Availability System - Location picker, time/day scheduling
-- [x] **Milestone 5**: Discovery & Matching - Map browse, express interest, mutual matching
-- [x] **Milestone 6 & 7**: Meetup Requests - Merged into Match flow (propose/confirm time)
-- [ ] **Milestone 8**: PWA & Polish - Service worker, offline support, install prompt (IN PROGRESS)
+Run `python -m app.seed --with-test-users` to create:
 
----
+| Name | Age | Gender | Location | Interests |
+|------|-----|--------|----------|-----------|
+| Alex | 25 | male | Central Park | Hiking, Coffee, Programming |
+| Jordan | 30 | female | Brooklyn Coffee | Photography, Yoga, Travel |
+| Sam | 28 | non-binary | Chelsea Piers | Soccer, Video Games, Anime |
+| Taylor | 35 | male | East Village | Music, Concerts, Wine |
+| Morgan | 23 | female | Bryant Park | AI & ML, Running, Travel |
 
-## Next Steps (Milestone 8)
-
-1. Install `vite-plugin-pwa` ✓ (installed, not configured)
-2. Configure PWA manifest with app icons
-3. Set up service worker for offline caching
-4. Add install prompt component
-5. Test mobile responsiveness
-6. (Future) Push notifications for matches
-
----
-
-## Deferred Features
-
-- **Rating System**: Thumbs up/down after meetups
-- **Anti-gaming**: Preventing fake accounts/ratings
-- **No-show handling**: Reporting/penalties
-- **Push notifications**: Real-time match alerts
+Private keys are printed to console when seeding.
 
 ---
 
 ## Key Design Decisions
 
-1. **Private Key Auth**: No email/password for privacy. Users save a generated key.
-2. **Approved Names**: Limited name list prevents unique names being identifiable.
-3. **No Messaging**: Forces real-world interaction - the whole point of the app.
-4. **Manual Matching**: No algorithm - users browse and choose who to meet.
-5. **Mutual Interest**: Both must express interest before seeing each other as a "match".
-6. **Location-First**: Everything revolves around WHERE people want to meet.
+1. **Dual Auth**: Email magic links (recommended) + private keys (legacy support)
+2. **Approved Names**: Limited name list prevents unique names being identifiable
+3. **No Messaging**: Forces real-world interaction - the whole point of the app
+4. **Manual Matching**: No algorithm - users browse and choose who to meet
+5. **Mutual Interest**: Both must express interest before Match is created
+6. **Auto Groups**: Groups form automatically on mutual match
+7. **Location-First**: Everything revolves around WHERE people want to meet
+8. **Open Source**: Full transparency - code is publicly auditable
