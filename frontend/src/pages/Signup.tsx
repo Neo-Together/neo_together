@@ -10,12 +10,15 @@ interface Interest {
 
 export default function Signup() {
   const [step, setStep] = useState(1)
+  const [signupMode, setSignupMode] = useState<'email' | 'key'>('email')
+  const [email, setEmail] = useState('')
   const [firstName, setFirstName] = useState('')
   const [birthYear, setBirthYear] = useState('')
   const [gender, setGender] = useState('')
   const [interestInput, setInterestInput] = useState('')
   const [selectedInterests, setSelectedInterests] = useState<Interest[]>([])
   const [privateKey, setPrivateKey] = useState('')
+  const [emailSent, setEmailSent] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [showNameSuggestions, setShowNameSuggestions] = useState(false)
@@ -88,25 +91,49 @@ export default function Signup() {
     setLoading(true)
 
     try {
-      const response = await fetch('/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          first_name: firstName,
-          birth_year: parseInt(birthYear),
-          gender,
-          interest_ids: selectedInterests.map((i) => i.id),
-        }),
-      })
+      if (signupMode === 'email') {
+        // Email signup
+        const response = await fetch('/api/auth/signup-with-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email,
+            first_name: firstName,
+            birth_year: parseInt(birthYear),
+            gender,
+            interest_ids: selectedInterests.map((i) => i.id),
+          }),
+        })
 
-      if (!response.ok) {
+        if (!response.ok) {
+          const data = await response.json()
+          throw new Error(data.detail || 'Signup failed')
+        }
+
+        setEmailSent(true)
+        setStep(3)
+      } else {
+        // Private key signup
+        const response = await fetch('/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            first_name: firstName,
+            birth_year: parseInt(birthYear),
+            gender,
+            interest_ids: selectedInterests.map((i) => i.id),
+          }),
+        })
+
+        if (!response.ok) {
+          const data = await response.json()
+          throw new Error(data.detail || 'Signup failed')
+        }
+
         const data = await response.json()
-        throw new Error(data.detail || 'Signup failed')
+        setPrivateKey(data.private_key)
+        setStep(3)
       }
-
-      const data = await response.json()
-      setPrivateKey(data.private_key)
-      setStep(3) // Show private key
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Signup failed')
     } finally {
@@ -114,10 +141,33 @@ export default function Signup() {
     }
   }
 
+  if (step === 3 && emailSent) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-orange-50 via-pink-50 to-purple-50">
+        <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md text-center">
+          <div className="text-5xl mb-4">📧</div>
+          <h1 className="text-2xl font-bold text-gray-800 mb-2">Check your email!</h1>
+          <p className="text-gray-600 mb-6">
+            We sent a login link to <strong>{email}</strong>
+          </p>
+          <p className="text-sm text-gray-500 mb-6">
+            Click the link in the email to complete your signup. The link expires in 15 minutes.
+          </p>
+          <Link
+            to="/login"
+            className="text-orange-500 hover:text-orange-600"
+          >
+            Back to Login
+          </Link>
+        </div>
+      </div>
+    )
+  }
+
   if (step === 3 && privateKey) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
+      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-orange-50 via-pink-50 to-purple-50">
+        <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md">
           <h1 className="text-2xl font-bold mb-4 text-green-600">Account Created!</h1>
           <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg mb-6">
             <p className="font-bold text-yellow-800 mb-2">
@@ -132,7 +182,7 @@ export default function Signup() {
           </div>
           <Link
             to="/login"
-            className="block w-full bg-blue-600 text-white py-2 rounded-lg text-center hover:bg-blue-700"
+            className="block w-full bg-gradient-to-r from-orange-400 to-pink-500 text-white py-3 rounded-lg text-center font-medium"
           >
             Go to Login
           </Link>
@@ -142,21 +192,61 @@ export default function Signup() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4">
-      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
-        <h1 className="text-2xl font-bold mb-6">Create Account</h1>
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-orange-50 via-pink-50 to-purple-50">
+      <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md">
+        <h1 className="text-2xl font-bold text-gray-800 mb-6">Create Account</h1>
         <div className="mb-6 flex gap-2">
-          <div className={`h-2 flex-1 rounded ${step >= 1 ? 'bg-blue-600' : 'bg-gray-200'}`} />
-          <div className={`h-2 flex-1 rounded ${step >= 2 ? 'bg-blue-600' : 'bg-gray-200'}`} />
+          <div className={`h-2 flex-1 rounded ${step >= 1 ? 'bg-orange-500' : 'bg-gray-200'}`} />
+          <div className={`h-2 flex-1 rounded ${step >= 2 ? 'bg-orange-500' : 'bg-gray-200'}`} />
         </div>
 
         {error && (
-          <div className="bg-red-100 text-red-700 p-3 rounded mb-4">{error}</div>
+          <div className="bg-red-100 text-red-700 p-3 rounded-lg mb-4">{error}</div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {step === 1 && (
             <>
+              {/* Signup Mode Toggle */}
+              <div className="flex mb-4 bg-gray-100 rounded-lg p-1">
+                <button
+                  type="button"
+                  onClick={() => setSignupMode('email')}
+                  className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
+                    signupMode === 'email'
+                      ? 'bg-white text-gray-800 shadow'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  Email Signup
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSignupMode('key')}
+                  className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
+                    signupMode === 'key'
+                      ? 'bg-white text-gray-800 shadow'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  Private Key
+                </button>
+              </div>
+
+              {signupMode === 'email' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-orange-300"
+                    placeholder="you@example.com"
+                    required={signupMode === 'email'}
+                  />
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium mb-1">Preferred Name</label>
                 <div className="relative">
@@ -249,8 +339,8 @@ export default function Signup() {
               <button
                 type="button"
                 onClick={() => setStep(2)}
-                disabled={!isValidName || !birthYear || !gender}
-                className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                disabled={!isValidName || !birthYear || !gender || (signupMode === 'email' && !email)}
+                className="w-full py-3 bg-gradient-to-r from-orange-400 to-pink-500 text-white font-medium rounded-lg shadow hover:shadow-lg disabled:opacity-50"
               >
                 Next
               </button>

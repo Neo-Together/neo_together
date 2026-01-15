@@ -61,6 +61,7 @@ class PersonAtLocation(BaseModel):
     user: UserRead
     availability: AvailabilityRead
     shared_interests: list[str]  # Names of shared interests
+    other_interests: list[str]  # Names of their interests that are NOT shared
     times_overlap: bool
     overlapping_times: list[dict] | None = None  # If times overlap, which slots
 

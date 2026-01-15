@@ -40,9 +40,24 @@ class UserRead(UserBase):
     is_available: bool
     interests: list[InterestRead]
     created_at: datetime
+    min_age_preference: int | None = None
+    max_age_preference: int | None = None
+    gender_preferences: list[str] = []
+    min_group_size: int = 2
+    max_group_size: int = 10
 
     class Config:
         from_attributes = True
+
+
+class UserPreferencesUpdate(BaseModel):
+    """Schema for updating user preferences."""
+
+    min_age_preference: int | None = Field(None, ge=18, le=100)
+    max_age_preference: int | None = Field(None, ge=18, le=100)
+    gender_preferences: list[str] | None = None
+    min_group_size: int | None = Field(None, ge=2, le=20)
+    max_group_size: int | None = Field(None, ge=2, le=20)
 
 
 class UserSignupResponse(BaseModel):

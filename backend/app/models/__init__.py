@@ -4,6 +4,7 @@ from app.models.user import User, Interest, user_interests
 from app.models.availability import Availability
 from app.models.meetup import MeetupRequest, Meetup, RequestStatus, MeetupStatus
 from app.models.interest_match import UserInterest, Match
+from app.models.group import Group, GroupMember, GroupJoinRequest
 
 __all__ = [
     "User",
@@ -16,4 +17,7 @@ __all__ = [
     "MeetupStatus",
     "UserInterest",  # User expressing interest in meeting another user
     "Match",  # Mutual interest between two users
+    "Group",  # Group formed by matched users
+    "GroupMember",  # Member of a group
+    "GroupJoinRequest",  # Request to join a group
 ]

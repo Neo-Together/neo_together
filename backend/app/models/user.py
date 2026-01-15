@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, Boolean, DateTime, Table, Column, ForeignKey
+from sqlalchemy import String, Integer, Boolean, DateTime, Table, Column, ForeignKey, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -33,6 +33,20 @@ class User(Base):
         DateTime, default=datetime.utcnow, nullable=False
     )
 
+    # Preferences for matching
+    min_age_preference: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_age_preference: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gender_preferences: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+
+    # Group size preferences
+    min_group_size: Mapped[int] = mapped_column(Integer, default=2)
+    max_group_size: Mapped[int] = mapped_column(Integer, default=10)
+
+    # Email authentication (optional for existing users, required for new)
+    email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    magic_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    magic_token_expires: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     # Relationships (using string references)
     interests = relationship("Interest", secondary=user_interests, back_populates="users")
     availabilities = relationship(
@@ -48,6 +62,8 @@ class User(Base):
         foreign_keys="MeetupRequest.recipient_id",
         back_populates="recipient",
     )
+    group_memberships = relationship("GroupMember", back_populates="user")
+    group_join_requests = relationship("GroupJoinRequest", back_populates="user")
 
 
 class Interest(Base):

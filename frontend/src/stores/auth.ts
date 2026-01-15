@@ -8,6 +8,11 @@ interface User {
   gender: string
   is_available: boolean
   interests: { id: number; name: string; category: string | null }[]
+  min_age_preference: number | null
+  max_age_preference: number | null
+  gender_preferences: string[]
+  min_group_size: number
+  max_group_size: number
 }
 
 interface AuthState {

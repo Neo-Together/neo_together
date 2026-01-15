@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models import User, Availability, Interest, UserInterest, Match
+from app.models import User, Availability, Interest, UserInterest, Match, Group, GroupMember
 from app.schemas.matching import (
     ExpressInterestRequest,
     MatchRead,
@@ -124,15 +124,66 @@ async def get_people_at_location(
     )
     availabilities = result.scalars().all()
 
+    # Get current year for age calculation
+    current_year = datetime.now().year
+
+    # Get my preferences
+    my_min_age = current_user_full.min_age_preference
+    my_max_age = current_user_full.max_age_preference
+    my_gender_prefs = current_user_full.gender_preferences or []
+    my_age = current_year - current_user_full.birth_year
+
     # Build response
     people = []
     for avail in availabilities:
         user = avail.user
+        their_age = current_year - user.birth_year
 
-        # Calculate shared interests
+        # Calculate shared and other interests
         their_interest_ids = {i.id for i in user.interests}
         shared_ids = my_interest_ids & their_interest_ids
         shared_names = [i.name for i in user.interests if i.id in shared_ids]
+        other_names = [i.name for i in user.interests if i.id not in shared_ids]
+
+        # Calculate match score based on preferences
+        # Higher score = better match (shown first)
+        match_score = 0
+
+        # Check if their age is within my preferences
+        age_match = True
+        if my_min_age and their_age < my_min_age:
+            age_match = False
+        if my_max_age and their_age > my_max_age:
+            age_match = False
+        if age_match:
+            match_score += 1
+
+        # Check if their gender is in my preferences
+        gender_match = True
+        if my_gender_prefs and user.gender not in my_gender_prefs:
+            gender_match = False
+        if gender_match:
+            match_score += 1
+
+        # Check if my age is within their preferences (mutual filtering)
+        their_min_age = user.min_age_preference
+        their_max_age = user.max_age_preference
+        their_gender_prefs = user.gender_preferences or []
+
+        mutual_age_match = True
+        if their_min_age and my_age < their_min_age:
+            mutual_age_match = False
+        if their_max_age and my_age > their_max_age:
+            mutual_age_match = False
+        if mutual_age_match:
+            match_score += 1
+
+        # Check if my gender is in their preferences (mutual filtering)
+        mutual_gender_match = True
+        if their_gender_prefs and current_user_full.gender not in their_gender_prefs:
+            mutual_gender_match = False
+        if mutual_gender_match:
+            match_score += 1
 
         # Check time overlap
         times_overlap = False
@@ -161,18 +212,23 @@ async def get_people_at_location(
                     "end": overlap_end,
                 })
 
-        people.append(
-            PersonAtLocation(
+        people.append({
+            "person": PersonAtLocation(
                 user=UserRead.model_validate(user),
                 availability=AvailabilityRead.model_validate(avail),
                 shared_interests=shared_names,
+                other_interests=other_names,
                 times_overlap=times_overlap,
                 overlapping_times=overlapping_times if times_overlap else None,
-            )
-        )
+            ),
+            "match_score": match_score,
+        })
 
-    # Sort: overlapping times first, then by number of shared interests
-    people.sort(key=lambda p: (-p.times_overlap, -len(p.shared_interests)))
+    # Sort: match score (highest first), then time overlap, then shared interests
+    people.sort(key=lambda p: (-p["match_score"], -p["person"].times_overlap, -len(p["person"].shared_interests)))
+
+    # Return only the PersonAtLocation objects
+    return [p["person"] for p in people]
 
     return people
 
@@ -258,6 +314,31 @@ async def express_interest(
                 status="pending",
             )
             db.add(match)
+
+            # Also create a Group for these two users
+            group = Group(
+                availability_id=data.availability_id,
+                status="active",
+            )
+            db.add(group)
+            await db.flush()  # Get the group ID
+
+            # Add both users as members
+            member1 = GroupMember(
+                group_id=group.id,
+                user_id=user1_id,
+                role="founder",
+                status="confirmed",
+            )
+            member2 = GroupMember(
+                group_id=group.id,
+                user_id=user2_id,
+                role="founder",
+                status="confirmed",
+            )
+            db.add(member1)
+            db.add(member2)
+
             match_created = True
 
     await db.commit()

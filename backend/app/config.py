@@ -17,6 +17,17 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7  # 1 week
 
+    # Email (SMTP) - optional, magic links printed to console in debug mode
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_use_tls: bool = True
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = "noreply@neotogether.app"
+
+    # Frontend URL for magic links
+    frontend_url: str = "http://localhost:5173"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

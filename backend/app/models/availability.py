@@ -51,3 +51,4 @@ class Availability(Base):
     # Relationships (using string references to avoid circular imports)
     user = relationship("User", back_populates="availabilities")
     meetup_requests = relationship("MeetupRequest", back_populates="availability")
+    groups = relationship("Group", back_populates="availability")
