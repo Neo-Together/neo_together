@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { GoogleMap, useJsApiLoader, Marker, InfoWindow, Autocomplete } from '@react-google-maps/api'
 import { useAuthStore } from '../stores/auth'
@@ -97,6 +97,7 @@ interface GroupJoinRequest {
 interface NewSpot {
   lat: number
   lng: number
+  name: string
   address: string
 }
 
@@ -119,11 +120,13 @@ export default function Dashboard() {
   const [selectedMySlot, setSelectedMySlot] = useState<AvailabilitySlot | null>(null)
   const [editingInterests, setEditingInterests] = useState(false)
   const [interestSearch, setInterestSearch] = useState('')
+  const [wikidataResults, setWikidataResults] = useState<{ id: string; name: string; description: string }[]>([])
+  const [searchingWikidata, setSearchingWikidata] = useState(false)
   const [proposingFor, setProposingFor] = useState<number | null>(null)
   const [proposedTime, setProposedTime] = useState('')
 
   // Preferences state
-  const [editingPreferences, setEditingPreferences] = useState(false)
+  const [editingPreferences, setEditingPreferences] = useState<string | null>(null)
   const [prefMinAge, setPrefMinAge] = useState<string>('')
   const [prefMaxAge, setPrefMaxAge] = useState<string>('')
   const [prefGenders, setPrefGenders] = useState<string[]>([])
@@ -426,19 +429,40 @@ export default function Dashboard() {
     const lat = e.latLng.lat()
     const lng = e.latLng.lng()
 
-    // Reverse geocode to get address
-    const geocoder = new google.maps.Geocoder()
-    try {
-      const response = await geocoder.geocode({ location: { lat, lng } })
-      const address = response.results[0]?.formatted_address || `${lat.toFixed(4)}, ${lng.toFixed(4)}`
+    // Check if user clicked on a POI (Point of Interest like a restaurant)
+    const placeId = (e as google.maps.IconMouseEvent).placeId
 
-      setNewSpot({ lat, lng, address })
-      setSelectedLocation(null)
-      setSelectedMySlot(null)
-    } catch {
-      setNewSpot({ lat, lng, address: `${lat.toFixed(4)}, ${lng.toFixed(4)}` })
+    if (placeId && mapRef) {
+      // User clicked on a business/place - get its details
+      const service = new google.maps.places.PlacesService(mapRef)
+      service.getDetails(
+        { placeId, fields: ['name', 'formatted_address', 'geometry'] },
+        (place, status) => {
+          if (status === google.maps.places.PlacesServiceStatus.OK && place) {
+            const name = place.name || place.formatted_address || ''
+            const address = place.formatted_address || ''
+            setNewSpot({ lat, lng, name, address })
+            setSelectedLocation(null)
+            setSelectedMySlot(null)
+          }
+        }
+      )
+    } else {
+      // User clicked on empty area - reverse geocode to get address
+      const geocoder = new google.maps.Geocoder()
+      try {
+        const response = await geocoder.geocode({ location: { lat, lng } })
+        const address = response.results[0]?.formatted_address || `${lat.toFixed(4)}, ${lng.toFixed(4)}`
+
+        setNewSpot({ lat, lng, name: address, address })
+        setSelectedLocation(null)
+        setSelectedMySlot(null)
+      } catch {
+        const coords = `${lat.toFixed(4)}, ${lng.toFixed(4)}`
+        setNewSpot({ lat, lng, name: coords, address: coords })
+      }
     }
-  }, [])
+  }, [mapRef])
 
   const handleSaveSpot = () => {
     if (!newSpot) return
@@ -452,7 +476,7 @@ export default function Dashboard() {
     }
 
     createAvailability.mutate({
-      location_name: newSpot.address,
+      location_name: newSpot.name,
       latitude: newSpot.lat,
       longitude: newSpot.lng,
       time_start: newSpotTimeStart,
@@ -482,18 +506,59 @@ export default function Dashboard() {
       if (place.geometry?.location && mapRef) {
         mapRef.panTo(place.geometry.location)
         mapRef.setZoom(14)
-        setSearchInput(place.formatted_address || place.name || '')
+        const name = place.name || place.formatted_address || ''
+        const address = place.formatted_address || ''
+        setSearchInput(name)
+        setNewSpot({
+          lat: place.geometry.location.lat(),
+          lng: place.geometry.location.lng(),
+          name,
+          address,
+        })
+        setSelectedLocation(null)
+        setSelectedMySlot(null)
       }
     }
   }, [autocomplete, mapRef])
 
-  // Filter interests for search
+  // Filter local interests for search
   const filteredInterests = useMemo(() => {
     if (!interestSearch.trim()) return allInterests
     return allInterests.filter((i) =>
       i.name.toLowerCase().includes(interestSearch.toLowerCase())
     )
   }, [interestSearch, allInterests])
+
+  // Search Wikidata for interests
+  useEffect(() => {
+    if (!interestSearch.trim() || interestSearch.length < 2) {
+      setWikidataResults([])
+      return
+    }
+
+    const timer = setTimeout(async () => {
+      setSearchingWikidata(true)
+      try {
+        const response = await fetch(
+          `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(
+            interestSearch
+          )}&language=en&limit=10&format=json&origin=*`
+        )
+        const data = await response.json()
+        const results = data.search?.map((item: { id: string; label: string; description?: string }) => ({
+          id: item.id,
+          name: item.label,
+          description: item.description || '',
+        })) || []
+        setWikidataResults(results)
+      } catch {
+        setWikidataResults([])
+      }
+      setSearchingWikidata(false)
+    }, 300)
+
+    return () => clearTimeout(timer)
+  }, [interestSearch])
 
   const hasExpressedInterest = (userId: string, availabilityId: number) => {
     return sentInterests.some(
@@ -606,202 +671,278 @@ export default function Dashboard() {
 
           {/* Interests */}
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="font-medium text-gray-700">✨ Your interests</h3>
-              <button
-                onClick={() => setEditingInterests(!editingInterests)}
-                className="text-sm text-orange-500 hover:text-orange-600"
-              >
-                {editingInterests ? 'Done' : 'Edit'}
-              </button>
-            </div>
+            <h3 className="font-medium text-gray-700 mb-2">✨ Your interests</h3>
             <div className="flex flex-wrap gap-2">
               {user.interests.map((interest) => (
-                <span
+                <button
                   key={interest.id}
-                  className="bg-gradient-to-r from-orange-100 to-pink-100 text-orange-700 px-3 py-1 rounded-full text-sm font-medium"
+                  onClick={() => {
+                    const newInterests = user.interests.filter((i) => i.id !== interest.id)
+                    updateUser({ interests: newInterests })
+                  }}
+                  className="group bg-gradient-to-r from-orange-100 to-pink-100 text-orange-700 px-3 py-1 rounded-full text-sm font-medium hover:from-red-100 hover:to-red-200 hover:text-red-700 transition-colors"
                 >
                   {interest.name}
-                </span>
+                  <span className="ml-1 opacity-0 group-hover:opacity-100">×</span>
+                </button>
               ))}
+
+              {/* Add interest button */}
+              <button
+                onClick={() => setEditingInterests(!editingInterests)}
+                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                  editingInterests
+                    ? 'bg-orange-500 text-white'
+                    : 'bg-gray-100 text-gray-500 hover:bg-orange-100 hover:text-orange-600'
+                }`}
+              >
+                + Add
+              </button>
             </div>
 
-            {/* Interest Editor */}
+            {/* Interest picker dropdown */}
             {editingInterests && (
-              <div className="mt-4 p-4 bg-gray-50 rounded-xl">
+              <div className="mt-3 p-3 bg-gray-50 rounded-xl border border-gray-200">
                 <input
                   type="text"
                   value={interestSearch}
                   onChange={(e) => setInterestSearch(e.target.value)}
-                  placeholder="Search interests..."
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 mb-3"
+                  placeholder="Search millions of interests..."
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 mb-2 text-sm"
+                  autoFocus
                 />
-                <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
-                  {filteredInterests.map((interest) => {
-                    const isSelected = user.interests.some((i) => i.id === interest.id)
-                    return (
-                      <button
-                        key={interest.id}
-                        className={`px-3 py-1 rounded-full text-sm transition-colors ${
-                          isSelected
-                            ? 'bg-orange-500 text-white'
-                            : 'bg-white border border-gray-200 text-gray-600 hover:border-orange-300'
-                        }`}
-                        onClick={() => {
-                          const newInterests = isSelected
-                            ? user.interests.filter((i) => i.id !== interest.id)
-                            : [...user.interests, interest]
-                          updateUser({ interests: newInterests })
-                        }}
-                      >
-                        {interest.name}
-                      </button>
-                    )
-                  })}
-                </div>
+
+                {searchingWikidata && (
+                  <p className="text-xs text-gray-400 mb-2">Searching...</p>
+                )}
+
+                {/* Wikidata results */}
+                {wikidataResults.length > 0 && (
+                  <div className="mb-2">
+                    <p className="text-xs text-gray-500 mb-1">From Wikidata:</p>
+                    <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+                      {wikidataResults
+                        .filter((w) => !user.interests.some((i) => i.name.toLowerCase() === w.name.toLowerCase()))
+                        .map((result) => (
+                          <button
+                            key={result.id}
+                            className="px-2 py-1 rounded-full text-xs bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 transition-colors"
+                            onClick={() => {
+                              // Add as new interest (will be created in DB if doesn't exist)
+                              const newInterest = { id: Date.now(), name: result.name, category: null }
+                              updateUser({ interests: [...user.interests, newInterest] })
+                              setInterestSearch('')
+                            }}
+                            title={result.description}
+                          >
+                            + {result.name}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Local interests */}
+                {filteredInterests.filter((i) => !user.interests.some((ui) => ui.id === i.id)).length > 0 && (
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Popular:</p>
+                    <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+                      {filteredInterests
+                        .filter((interest) => !user.interests.some((i) => i.id === interest.id))
+                        .slice(0, 15)
+                        .map((interest) => (
+                          <button
+                            key={interest.id}
+                            className="px-2 py-1 rounded-full text-xs bg-white border border-gray-200 text-gray-600 hover:border-orange-300 hover:bg-orange-50 transition-colors"
+                            onClick={() => {
+                              updateUser({ interests: [...user.interests, interest] })
+                            }}
+                          >
+                            + {interest.name}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => { setEditingInterests(false); setInterestSearch('') }}
+                  className="mt-2 text-xs text-gray-500 hover:text-gray-700"
+                >
+                  Done
+                </button>
               </div>
             )}
           </div>
 
           {/* Preferences Section */}
           <div className="mt-4 pt-4 border-t border-gray-100">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="font-medium text-gray-700">🎯 Who you want to meet</h3>
+            <h3 className="font-medium text-gray-700 mb-2">🎯 Who you want to meet</h3>
+
+            {/* Display chips - click to edit */}
+            <div className="flex flex-wrap gap-2">
+              {/* Age chip */}
               <button
-                onClick={() => {
-                  if (!editingPreferences) {
-                    setPrefMinAge(user.min_age_preference?.toString() || '')
-                    setPrefMaxAge(user.max_age_preference?.toString() || '')
-                    setPrefGenders(user.gender_preferences || [])
-                    setPrefMinGroupSize(user.min_group_size?.toString() || '2')
-                    setPrefMaxGroupSize(user.max_group_size?.toString() || '10')
-                  }
-                  setEditingPreferences(!editingPreferences)
-                }}
-                className="text-sm text-orange-500 hover:text-orange-600"
+                onClick={() => setEditingPreferences(editingPreferences === 'age' ? null : 'age')}
+                className={`px-3 py-1 rounded-full text-sm transition-colors ${
+                  editingPreferences === 'age'
+                    ? 'bg-purple-500 text-white'
+                    : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                }`}
               >
-                {editingPreferences ? 'Cancel' : 'Edit'}
+                Age: {user.min_age_preference || 18} - {user.max_age_preference || 99}
+              </button>
+
+              {/* Gender chip */}
+              <button
+                onClick={() => setEditingPreferences(editingPreferences === 'gender' ? null : 'gender')}
+                className={`px-3 py-1 rounded-full text-sm transition-colors ${
+                  editingPreferences === 'gender'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                }`}
+              >
+                {user.gender_preferences?.length
+                  ? user.gender_preferences.join(', ')
+                  : 'Any gender'}
+              </button>
+
+              {/* Group size chip */}
+              <button
+                onClick={() => setEditingPreferences(editingPreferences === 'group' ? null : 'group')}
+                className={`px-3 py-1 rounded-full text-sm transition-colors ${
+                  editingPreferences === 'group'
+                    ? 'bg-green-500 text-white'
+                    : 'bg-green-100 text-green-700 hover:bg-green-200'
+                }`}
+              >
+                Group: {user.min_group_size || 2} - {user.max_group_size || 10}
               </button>
             </div>
 
-            {!editingPreferences ? (
-              <div className="text-sm text-gray-600">
-                <div className="flex flex-wrap gap-2">
-                  {(user.min_age_preference || user.max_age_preference) && (
-                    <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded-full text-xs">
-                      Age: {user.min_age_preference || '18'} - {user.max_age_preference || '100'}
-                    </span>
-                  )}
-                  {user.gender_preferences && user.gender_preferences.length > 0 && (
-                    <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-xs">
-                      {user.gender_preferences.join(', ')}
-                    </span>
-                  )}
-                  <span className="bg-green-100 text-green-700 px-2 py-1 rounded-full text-xs">
-                    Group: {user.min_group_size || 2} - {user.max_group_size || 10} people
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <div className="p-4 bg-gray-50 rounded-xl space-y-4">
-                {/* Age Range */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Age range</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={prefMinAge}
-                      onChange={(e) => setPrefMinAge(e.target.value)}
-                      placeholder="Min"
-                      min="18"
-                      max="100"
-                      className="w-20 border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                    />
-                    <span className="text-gray-400">to</span>
-                    <input
-                      type="number"
-                      value={prefMaxAge}
-                      onChange={(e) => setPrefMaxAge(e.target.value)}
-                      placeholder="Max"
-                      min="18"
-                      max="100"
-                      className="w-20 border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                    />
+            {/* Edit panels */}
+            {editingPreferences === 'age' && (
+              <div className="mt-3 p-3 bg-purple-50 rounded-xl border border-purple-200">
+                <p className="text-xs text-purple-600 mb-2">Age range</p>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const current = user.min_age_preference || 18
+                        if (current > 18) updatePreferences.mutate({ min_age_preference: current - 1 })
+                      }}
+                      className="w-8 h-8 rounded-full bg-white hover:bg-purple-100 text-purple-600 font-bold shadow-sm"
+                    >−</button>
+                    <span className="w-10 text-center font-medium">{user.min_age_preference || 18}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const current = user.min_age_preference || 18
+                        if (current < 99) updatePreferences.mutate({ min_age_preference: current + 1 })
+                      }}
+                      className="w-8 h-8 rounded-full bg-white hover:bg-purple-100 text-purple-600 font-bold shadow-sm"
+                    >+</button>
+                  </div>
+                  <span className="text-purple-400">to</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const current = user.max_age_preference || 99
+                        if (current > 18) updatePreferences.mutate({ max_age_preference: current - 1 })
+                      }}
+                      className="w-8 h-8 rounded-full bg-white hover:bg-purple-100 text-purple-600 font-bold shadow-sm"
+                    >−</button>
+                    <span className="w-10 text-center font-medium">{user.max_age_preference || 99}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const current = user.max_age_preference || 99
+                        if (current < 99) updatePreferences.mutate({ max_age_preference: current + 1 })
+                      }}
+                      className="w-8 h-8 rounded-full bg-white hover:bg-purple-100 text-purple-600 font-bold shadow-sm"
+                    >+</button>
                   </div>
                 </div>
+              </div>
+            )}
 
-                {/* Gender Preferences */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Gender preferences</label>
-                  <div className="flex flex-wrap gap-2">
-                    {['male', 'female', 'non-binary', 'other'].map((gender) => (
+            {editingPreferences === 'gender' && (
+              <div className="mt-3 p-3 bg-blue-50 rounded-xl border border-blue-200">
+                <p className="text-xs text-blue-600 mb-2">Select genders (or none for any)</p>
+                <div className="flex flex-wrap gap-2">
+                  {['male', 'female', 'non-binary', 'other'].map((gender) => {
+                    const isSelected = user.gender_preferences?.includes(gender)
+                    return (
                       <button
                         key={gender}
                         type="button"
                         onClick={() => {
-                          setPrefGenders((prev) =>
-                            prev.includes(gender)
-                              ? prev.filter((g) => g !== gender)
-                              : [...prev, gender]
-                          )
+                          const newGenders = isSelected
+                            ? user.gender_preferences?.filter((g) => g !== gender) || []
+                            : [...(user.gender_preferences || []), gender]
+                          updatePreferences.mutate({ gender_preferences: newGenders })
                         }}
                         className={`px-3 py-1 rounded-full text-sm transition-colors capitalize ${
-                          prefGenders.includes(gender)
+                          isSelected
                             ? 'bg-blue-500 text-white'
-                            : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'
+                            : 'bg-white text-blue-600 hover:bg-blue-100 shadow-sm'
                         }`}
                       >
                         {gender}
                       </button>
-                    ))}
-                  </div>
-                  <p className="text-xs text-gray-400 mt-1">Leave empty to see everyone</p>
+                    )
+                  })}
                 </div>
+              </div>
+            )}
 
-                {/* Group Size Preferences */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Group size comfort</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={prefMinGroupSize}
-                      onChange={(e) => setPrefMinGroupSize(e.target.value)}
-                      placeholder="Min"
-                      min="2"
-                      max="20"
-                      className="w-20 border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                    />
-                    <span className="text-gray-400">to</span>
-                    <input
-                      type="number"
-                      value={prefMaxGroupSize}
-                      onChange={(e) => setPrefMaxGroupSize(e.target.value)}
-                      placeholder="Max"
-                      min="2"
-                      max="20"
-                      className="w-20 border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                    />
-                    <span className="text-gray-400 text-sm">people</span>
+            {editingPreferences === 'group' && (
+              <div className="mt-3 p-3 bg-green-50 rounded-xl border border-green-200">
+                <p className="text-xs text-green-600 mb-2">Group size comfort</p>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const current = user.min_group_size || 2
+                        if (current > 2) updatePreferences.mutate({ min_group_size: current - 1 })
+                      }}
+                      className="w-8 h-8 rounded-full bg-white hover:bg-green-100 text-green-600 font-bold shadow-sm"
+                    >−</button>
+                    <span className="w-8 text-center font-medium">{user.min_group_size || 2}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const current = user.min_group_size || 2
+                        if (current < 20) updatePreferences.mutate({ min_group_size: current + 1 })
+                      }}
+                      className="w-8 h-8 rounded-full bg-white hover:bg-green-100 text-green-600 font-bold shadow-sm"
+                    >+</button>
                   </div>
-                  <p className="text-xs text-gray-400 mt-1">Set your comfort level for group meetups</p>
+                  <span className="text-green-400">to</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const current = user.max_group_size || 10
+                        if (current > 2) updatePreferences.mutate({ max_group_size: current - 1 })
+                      }}
+                      className="w-8 h-8 rounded-full bg-white hover:bg-green-100 text-green-600 font-bold shadow-sm"
+                    >−</button>
+                    <span className="w-8 text-center font-medium">{user.max_group_size || 10}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const current = user.max_group_size || 10
+                        if (current < 20) updatePreferences.mutate({ max_group_size: current + 1 })
+                      }}
+                      className="w-8 h-8 rounded-full bg-white hover:bg-green-100 text-green-600 font-bold shadow-sm"
+                    >+</button>
+                  </div>
+                  <span className="text-green-600 text-sm">people</span>
                 </div>
-
-                {/* Save Button */}
-                <button
-                  onClick={() => {
-                    updatePreferences.mutate({
-                      min_age_preference: prefMinAge ? parseInt(prefMinAge) : null,
-                      max_age_preference: prefMaxAge ? parseInt(prefMaxAge) : null,
-                      gender_preferences: prefGenders,
-                      min_group_size: parseInt(prefMinGroupSize) || 2,
-                      max_group_size: parseInt(prefMaxGroupSize) || 10,
-                    })
-                  }}
-                  disabled={updatePreferences.isPending}
-                  className="w-full py-2 bg-gradient-to-r from-purple-400 to-blue-500 text-white font-medium rounded-lg shadow hover:shadow-lg transition-shadow disabled:opacity-50"
-                >
-                  {updatePreferences.isPending ? 'Saving...' : 'Save Preferences'}
-                </button>
               </div>
             )}
           </div>
@@ -964,56 +1105,61 @@ export default function Dashboard() {
               <p className="text-sm text-gray-600 mb-4">{newSpot.address}</p>
 
               <div className="space-y-4">
-                {/* Date picker */}
+                {/* Day selection */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
                     When will you be here?
                   </label>
-                  <input
-                    type="date"
-                    value={newSpotDate}
-                    onChange={(e) => setNewSpotDate(e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg p-2"
-                    min={new Date().toISOString().split('T')[0]}
-                  />
-                </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(() => {
+                      const today = new Date()
+                      const tomorrow = new Date(today)
+                      tomorrow.setDate(tomorrow.getDate() + 1)
+                      const todayStr = today.toISOString().split('T')[0]
+                      const tomorrowStr = tomorrow.toISOString().split('T')[0]
 
-                {/* Time range */}
-                <div className="flex gap-4">
-                  <div className="flex-1">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">From</label>
-                    <input
-                      type="time"
-                      value={newSpotTimeStart}
-                      onChange={(e) => setNewSpotTimeStart(e.target.value)}
-                      className="w-full border border-gray-200 rounded-lg p-2"
-                    />
+                      return (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => { setNewSpotDate(todayStr); setNewSpotRepeat(false) }}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                              newSpotDate === todayStr && !newSpotRepeat
+                                ? 'bg-orange-500 text-white'
+                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                          >
+                            Today
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setNewSpotDate(tomorrowStr); setNewSpotRepeat(false) }}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                              newSpotDate === tomorrowStr && !newSpotRepeat
+                                ? 'bg-orange-500 text-white'
+                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                          >
+                            Tomorrow
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setNewSpotRepeat(true); setNewSpotDate('') }}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                              newSpotRepeat
+                                ? 'bg-orange-500 text-white'
+                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                          >
+                            Weekly
+                          </button>
+                        </>
+                      )
+                    })()}
                   </div>
-                  <div className="flex-1">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">To</label>
-                    <input
-                      type="time"
-                      value={newSpotTimeEnd}
-                      onChange={(e) => setNewSpotTimeEnd(e.target.value)}
-                      className="w-full border border-gray-200 rounded-lg p-2"
-                    />
-                  </div>
-                </div>
-
-                {/* Repeat option */}
-                <div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={newSpotRepeat}
-                      onChange={(e) => setNewSpotRepeat(e.target.checked)}
-                      className="w-4 h-4 text-orange-500"
-                    />
-                    <span className="text-sm text-gray-700">Repeat weekly</span>
-                  </label>
 
                   {newSpotRepeat && (
-                    <div className="flex gap-2 mt-2">
+                    <div className="flex flex-wrap gap-2 mt-3">
                       {DAY_NAMES.map((day, index) => (
                         <button
                           key={day}
@@ -1021,7 +1167,7 @@ export default function Dashboard() {
                           onClick={() => toggleRepeatDay(index)}
                           className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
                             newSpotRepeatDays.includes(index)
-                              ? 'bg-orange-500 text-white'
+                              ? 'bg-blue-500 text-white'
                               : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                           }`}
                         >
@@ -1030,6 +1176,94 @@ export default function Dashboard() {
                       ))}
                     </div>
                   )}
+                </div>
+
+                {/* Time selection */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    What time?
+                  </label>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {[
+                      { label: 'Morning', start: '08:00', end: '12:00' },
+                      { label: 'Lunch', start: '11:00', end: '14:00' },
+                      { label: 'Afternoon', start: '14:00', end: '18:00' },
+                      { label: 'Evening', start: '18:00', end: '22:00' },
+                    ].map((slot) => (
+                      <button
+                        key={slot.label}
+                        type="button"
+                        onClick={() => {
+                          setNewSpotTimeStart(slot.start)
+                          setNewSpotTimeEnd(slot.end)
+                        }}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                          newSpotTimeStart === slot.start && newSpotTimeEnd === slot.end
+                            ? 'bg-purple-500 text-white'
+                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >
+                        {slot.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Fine-tune times */}
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const [h, m] = newSpotTimeStart.split(':').map(Number)
+                          const newH = h > 0 ? h - 1 : 23
+                          setNewSpotTimeStart(`${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
+                        }}
+                        className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold"
+                      >
+                        −
+                      </button>
+                      <span className="w-14 text-center font-medium">{newSpotTimeStart}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const [h, m] = newSpotTimeStart.split(':').map(Number)
+                          const newH = h < 23 ? h + 1 : 0
+                          setNewSpotTimeStart(`${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
+                        }}
+                        className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold"
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    <span className="text-gray-400">to</span>
+
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const [h, m] = newSpotTimeEnd.split(':').map(Number)
+                          const newH = h > 0 ? h - 1 : 23
+                          setNewSpotTimeEnd(`${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
+                        }}
+                        className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold"
+                      >
+                        −
+                      </button>
+                      <span className="w-14 text-center font-medium">{newSpotTimeEnd}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const [h, m] = newSpotTimeEnd.split(':').map(Number)
+                          const newH = h < 23 ? h + 1 : 0
+                          setNewSpotTimeEnd(`${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
+                        }}
+                        className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Actions */}
@@ -1113,6 +1347,7 @@ export default function Dashboard() {
                   setNewSpot({
                     lat: selectedLocation.latitude,
                     lng: selectedLocation.longitude,
+                    name: selectedLocation.location_name,
                     address: selectedLocation.location_name,
                   })
                   setSelectedLocation(null)

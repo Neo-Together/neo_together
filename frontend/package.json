@@ -1,15 +1,20 @@
 {
-  "name": "frontend",
+  "name": "neo-together",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "cap:sync": "cap sync",
+    "cap:android": "cap open android",
+    "android:build": "npm run build && cap sync android"
   },
   "dependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
     "@react-google-maps/api": "^2.20.8",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-query": "^5.90.17",
@@ -24,6 +29,7 @@
     "zustand": "^5.0.10"
   },
   "devDependencies": {
+    "@capacitor/cli": "^6.0.0",
     "@eslint/js": "^9.39.1",
     "@types/leaflet": "^1.9.21",
     "@types/node": "^24.10.1",

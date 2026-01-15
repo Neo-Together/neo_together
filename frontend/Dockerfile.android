@@ -1,0 +1,41 @@
+# Android build container for Capacitor
+FROM node:20
+
+# Install OpenJDK 17 (required for Android SDK)
+RUN apt-get update && apt-get install -y \
+    openjdk-17-jdk \
+    wget \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+# Install Android SDK command-line tools
+ENV ANDROID_HOME=/opt/android-sdk
+ENV PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+
+RUN mkdir -p $ANDROID_HOME/cmdline-tools && \
+    cd $ANDROID_HOME/cmdline-tools && \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O tools.zip && \
+    unzip -q tools.zip && \
+    rm tools.zip && \
+    mv cmdline-tools latest
+
+# Accept licenses and install required SDK components
+RUN yes | sdkmanager --licenses && \
+    sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+WORKDIR /app
+
+# Install dependencies
+COPY package.json package-lock.json* ./
+RUN npm install
+
+# Install Capacitor CLI globally for convenience
+RUN npm install -g @capacitor/cli
+
+# Copy source
+COPY . .
+
+# Default: build the Android APK
+CMD ["sh", "-c", "npm run build && npx cap sync android && cd android && ./gradlew assembleDebug"]
